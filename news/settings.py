@@ -59,7 +59,8 @@ DOWNLOAD_DELAY = 6
 # Configure item pipeline4
 # See https://docs.scrapy.org/en/latest/topics/item-pipeline.html
 ITEM_PIPELINES = {
-   "news.pipelines.NewsmysqlPipeline": 300,
+   "news.pipelines.NewsmysqlPipeline": 301,
+   "news.pipelines.NewsMongoPipeline": 300,
 }
 
 # Enable and configure the AutoThrottle extension (disabled by default)

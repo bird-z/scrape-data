@@ -33,8 +33,10 @@ class NewsmysqlPipeline:
         else:
             flow_val = 0
 
+        # url 上有唯一索引：重复条目更新热度，不产生重复行
         self.cursor.execute(
-            'INSERT INTO news (name, url, flow) VALUES (%s, %s, %s)',
+            'INSERT INTO news (name, url, flow) VALUES (%s, %s, %s) '
+            'ON DUPLICATE KEY UPDATE name = VALUES(name), flow = VALUES(flow)',
             (adapter.get('title'), adapter.get('url'), flow_val)
         )
         self.connection.commit()
@@ -45,14 +47,34 @@ class NewsmysqlPipeline:
         self.connection.close()
 
 class NewsMongoPipeline:
+    """Atlas 备份存储。连接为懒加载 + 可容错：外网/DNS 不可用时
+    只打一条警告并跳过写入，不再拖死整个爬虫。"""
+
     def __init__(self):
         self.uri = "mongodb+srv://bird:1140@birdb.weqklox.mongodb.net/?appName=birdb"
-        self.client=pymongo.MongoClient(self.uri)
-        self.db=self.client['Mynews']
-        self.collection=self.db['bili']
-        # self.collection.client.serverSelectionTimeoutMS=5000
+        self.client = None
+        self.collection = None
+        self._warned = False
+
+    def _ensure_connected(self):
+        if self.collection is not None:
+            return True
+        try:
+            self.client = pymongo.MongoClient(self.uri, serverSelectionTimeoutMS=3000)
+            self.client.admin.command('ping')
+            self.collection = self.client['Mynews']['bili']
+            return True
+        except Exception:
+            if not self._warned:
+                import logging
+                logging.getLogger(__name__).warning(
+                    'MongoDB Atlas unreachable; mongo pipeline disabled for this run')
+                self._warned = True
+            return False
 
     def process_item(self, item, spider):
+        if not self._ensure_connected():
+            return item
         adapter = ItemAdapter(item)
         flow_raw = adapter.get('flow') or '0'
 
@@ -65,12 +87,16 @@ class NewsMongoPipeline:
         else:
             flow_val = 0
 
-        self.collection.insert_one({
-            'name': adapter.get('title'),
-            'url': adapter.get('url'),
-            'flow': flow_val
-        })
+        try:
+            self.collection.insert_one({
+                'name': adapter.get('title'),
+                'url': adapter.get('url'),
+                'flow': flow_val
+            })
+        except Exception:
+            pass
         return item
 
     def close_spider(self, spider):
-        self.client.close()
+        if self.client is not None:
+            self.client.close()
